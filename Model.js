@@ -84,7 +84,7 @@ function parseCollector(text) {
         apps: Array.isArray(parsed.apps) ? parsed.apps : [],
         usdToEur: number(parsed.usdToEur, 1) > 0 ? number(parsed.usdToEur, 1) : 1,
         updatedAt: String(parsed.updatedAt || ""),
-        error: go && go.status && go.status !== "ok" ? "Go: " + go.status : ""
+        error: go && go.status && go.status !== "ok" && go.status !== "No API key" ? "Go: " + go.status : ""
       }
     }
   } catch (error) {

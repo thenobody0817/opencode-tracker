@@ -22,6 +22,9 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   // Daily USD->EUR rate published by the collector (1 if it could not fetch).
   readonly property real usdToEur: service.usdToEur > 0 ? service.usdToEur : 1
+  // The Go limit section only makes sense once the Go usage endpoint answered;
+  // a missing API key hides it instead of rendering a row of dashes.
+  readonly property bool goReady: !!service.go && service.go.status === "ok"
   readonly property bool alarming: service.go ? Model.behindPace(
     Model.normalizeWindow(service.go.weekly, "weekly", nowMs), nowMs) : false
   // User-set weekly budget in USD (0 = off). Red dot when spent past it.
@@ -539,12 +542,12 @@ Panel {
           PanelSeparator {
             width: parent.width
             foreground: root.foreground
-            visible: !!service.go
+            visible: root.goReady
           }
 
           GoSection {
             width: body.width
-            visible: !!service.go
+            visible: root.goReady
           }
 
           Text {
