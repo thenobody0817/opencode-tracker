@@ -9,16 +9,18 @@ Item {
   property var providers: []
   property var go: null
   property var recentDays: []
+  property var apps: []
+  property real usdToEur: 1
   property bool refreshing: false
   property bool collectorTimedOut: false
   property string lastError: ""
   property string output: ""
   property date lastUpdated: new Date(0)
-  readonly property string collectorScript: decodeURIComponent(String(Qt.resolvedUrl("collector.sh")).replace(/^file:\/\//, ""))
+  readonly property string collectorScript: decodeURIComponent(String(Qt.resolvedUrl("collector.py")).replace(/^file:\/\//, ""))
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 300, 60, 3600)
-  // Marketplace hardening: absolute interpreter chain (no PATH lookup) and a
-  // byte ceiling shared with collector.sh's COLLECTOR_MAX_BYTES.
-  readonly property string bashBin: "/usr/bin/bash"
+  // Hardening: absolute interpreter chain (no PATH lookup) and a byte ceiling
+  // shared with collector.py's COLLECTOR_MAX_BYTES.
+  readonly property string pythonBin: "/usr/bin/python3"
   readonly property string setsidBin: "/usr/bin/setsid"
   readonly property int maxCollectorBytes: 262144
 
@@ -37,9 +39,10 @@ Item {
     collectorTimedOut = false
     collectorKillGrace.stop()
     lastError = ""
-    // setsid makes the collector lead its own process group so its
-    // TERM trap can stop the whole tree; --noprofile --norc isolates bash.
-    collector.command = [root.setsidBin, root.bashBin, "--noprofile", "--norc", root.collectorScript]
+    // setsid isolates the collector in its own process group; Python installs
+    // a SIGTERM handler so the watchdog can stop it cleanly. -- isolates the
+    // script path from any interpreter flags.
+    collector.command = [root.setsidBin, root.pythonBin, "--", root.collectorScript]
     collector.running = true
   }
   Timer {
@@ -79,10 +82,10 @@ Item {
     command: []
     // Closed allowlisted environment: HOME (+TZ for sqlite localtime) pass
     // through from the shell; PATH is pinned so shadowed binaries on the
-    // user's PATH cannot intercept the collector. OPENCODE_* are the
-    // documented test overrides; COLLECTOR_PG_LEADER arms the collector's
-    // process-group teardown trap. Everything else (LD_PRELOAD, BASH_ENV…)
-    // is stripped. stdin stays closed (stdinEnabled defaults to false).
+    // user's PATH cannot intercept the collector. OPENCODE_* and DEEPSEEK_*
+    // are documented overrides; COLLECTOR_PG_LEADER arms the collector's
+    // process-group teardown. Everything else (LD_PRELOAD, PYTHONPATH…) is
+    // stripped. stdin stays closed (stdinEnabled defaults to false).
     clearEnvironment: true
     environment: ({
       HOME: null,
@@ -90,6 +93,8 @@ Item {
       PATH: "/usr/bin:/bin",
       OPENCODE_AUTH_JSON: null,
       OPENCODE_DB: null,
+      DEEPSEEK_API_KEY: null,
+      DEEPSEEK_USD_TO_EUR: null,
       COLLECTOR_PG_LEADER: "1"
     })
     workingDirectory: "/"
@@ -123,6 +128,8 @@ Item {
       root.providers = parsed.data.providers
       root.go = parsed.data.go
       root.recentDays = parsed.data.recentDays
+      root.apps = parsed.data.apps
+      root.usdToEur = parsed.data.usdToEur
       root.lastError = parsed.data.error
       root.lastUpdated = new Date()
     }

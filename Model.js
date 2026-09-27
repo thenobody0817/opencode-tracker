@@ -8,7 +8,8 @@ var PROVIDER_LABELS = {
   "opencode": "Zen",
   "opencode-go": "Go",
   "amazon-bedrock": "Bedrock",
-  "openrouter": "OpenRouter"
+  "openrouter": "OpenRouter",
+  "deepseek": "DeepSeek"
 }
 
 function label(id) {
@@ -72,7 +73,7 @@ function parseCollector(text) {
     return {
       ok: true,
       data: {
-        providers: parsed.providers,
+        providers: parsed.providers.map(normalizeProvider),
         go: go ? {
           status: String(go.status || ""),
           rolling: go.rolling || null,
@@ -80,6 +81,8 @@ function parseCollector(text) {
           monthly: go.monthly || null
         } : null,
         recentDays: Array.isArray(parsed.recentDays) ? parsed.recentDays : [],
+        apps: Array.isArray(parsed.apps) ? parsed.apps : [],
+        usdToEur: number(parsed.usdToEur, 1) > 0 ? number(parsed.usdToEur, 1) : 1,
         updatedAt: String(parsed.updatedAt || ""),
         error: go && go.status && go.status !== "ok" ? "Go: " + go.status : ""
       }
@@ -87,6 +90,43 @@ function parseCollector(text) {
   } catch (error) {
     return { ok: false, error: "Could not parse OpenCode usage" }
   }
+}
+
+// A provider carries the upstream shape plus an optional prepaid balance (the
+// DeepSeek credit ledger from the local collector).
+function normalizeProvider(provider) {
+  var data = provider && typeof provider === "object" ? provider : {}
+  data.balance = balanceValue(data.balance)
+  return data
+}
+
+function balanceValue(raw) {
+  if (!raw || typeof raw !== "object") return null
+  var remaining = Number(raw.remaining)
+  if (!isFinite(remaining) || remaining < 0) return null
+  var funded = Number(raw.funded)
+  return {
+    remaining: remaining,
+    funded: isFinite(funded) && funded > 0 ? funded : 0,
+    spent: Math.max(0, Number(raw.spent) || 0),
+    currency: String(raw.currency || "USD"),
+    estimated: raw.estimated === true
+  }
+}
+
+// EUR display: usage costs are recorded in USD by opencode, so scale by the
+// collector's daily USD->EUR rate.
+function euros(value, rate) {
+  var amount = number(value, 0) * (number(rate, 1) > 0 ? number(rate, 1) : 1)
+  return "\u20ac" + amount.toFixed(2)
+}
+
+// Currency-aware amount for balances, which stay in their native currency.
+function money(value, currency) {
+  var code = String(currency || "USD").toUpperCase()
+  var symbol = code === "USD" ? "$" : code === "EUR" ? "\u20ac" : code === "CNY" ? "\u00a5" : ""
+  var amount = number(value, 0).toFixed(2)
+  return symbol ? symbol + amount : amount + " " + code
 }
 
 function percent(value) {
@@ -213,6 +253,8 @@ var exportsObject = {
   parseCollector: parseCollector,
   percent: percent,
   dollars: dollars,
+  euros: euros,
+  money: money,
   countdown: countdown,
   tokenCount: tokenCount,
   dayTokens: dayTokens,

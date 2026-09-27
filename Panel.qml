@@ -8,8 +8,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "io.github.thespd.opencode-tracker"
-  ipcTarget: "io.github.thespd.opencode-tracker"
+  moduleName: "io.github.thenobody0817.opencode-tracker"
+  ipcTarget: "io.github.thenobody0817.opencode-tracker"
 
   property double nowMs: Date.now()
   property string expandedProviderId: ""
@@ -20,6 +20,8 @@ Panel {
   readonly property color ok: "#6fbf73"
   readonly property color dim: Qt.darker(foreground, 1.35)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  // Daily USD->EUR rate published by the collector (1 if it could not fetch).
+  readonly property real usdToEur: service.usdToEur > 0 ? service.usdToEur : 1
   readonly property bool alarming: service.go ? Model.behindPace(
     Model.normalizeWindow(service.go.weekly, "weekly", nowMs), nowMs) : false
   // User-set weekly budget in USD (0 = off). Red dot when spent past it.
@@ -47,7 +49,7 @@ Panel {
   }
   readonly property var statTiles: [
     { value: Model.tokenCount(Model.weekTotal(service.providers)), label: "TOKENS · 7D" },
-    { value: Model.dollars(Model.weekCost(service.providers)), label: "COST · 7D" },
+    { value: Model.euros(Model.weekCost(service.providers), root.usdToEur), label: "COST · 7D" },
     { value: String(root.modelCount), label: root.modelCount === 1 ? "MODEL" : "MODELS" }
   ]
 
@@ -170,9 +172,11 @@ Panel {
 
           PanelHero {
             width: parent.width
-            title: "OpenCode Usage"
+            title: "OpenCode Tracker"
             meta: service.providers.length
-              ? service.providers.length + " provider" + (service.providers.length === 1 ? "" : "s") + " · " + Model.tokenCount(Model.weekTotal(service.providers)) + " tokens this week"
+              ? service.providers.length + " provider" + (service.providers.length === 1 ? "" : "s")
+                + " · " + Model.tokenCount(Model.weekTotal(service.providers)) + " tokens this week"
+                + " · " + Model.euros(Model.dayCost(service.recentDays[service.recentDays.length - 1]), root.usdToEur) + " today"
               : "Waiting for usage data"
             detail: service.refreshing ? "Refreshing…" : ("Updated " + (service.lastUpdated.getTime() === 0 ? "never" : Qt.formatTime(service.lastUpdated, "HH:mm:ss")))
             foreground: root.foreground
@@ -452,6 +456,89 @@ Panel {
           PanelSeparator {
             width: parent.width
             foreground: root.foreground
+            visible: service.apps.length > 0
+          }
+
+          PanelSectionHeader {
+            visible: service.apps.length > 0
+            text: "TOP APPS"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Column {
+            visible: service.apps.length > 0
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: service.apps
+
+              delegate: Item {
+                required property var modelData
+                width: parent.width
+                implicitHeight: Math.max(appName.implicitHeight, appTokens.implicitHeight, appCost.implicitHeight) + Style.space(10)
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: Style.space(8)
+                  color: Util.alpha(root.foreground, 0.06)
+
+                  Rectangle {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: parent.height
+                    radius: parent.radius
+                    color: Util.alpha(root.foreground, 0.10)
+                    width: parent.width * Math.max(0, Math.min(1,
+                      (Number(modelData.tokens) || 0)
+                        / Math.max(1, Number(service.apps[0] ? service.apps[0].tokens : 0))))
+                  }
+                }
+
+                Text {
+                  id: appName
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
+                  anchors.right: appTokens.left
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: String(modelData.name || "")
+                  elide: Text.ElideRight
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  id: appTokens
+                  anchors.right: appCost.left
+                  anchors.rightMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Model.tokenCount(modelData.tokens)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Text {
+                  id: appCost
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Model.euros(modelData.costUsd, root.usdToEur)
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+            }
+          }
+
+          PanelSeparator {
+            width: parent.width
+            foreground: root.foreground
             visible: !!service.go
           }
 
@@ -528,6 +615,10 @@ Panel {
     readonly property var provider: modelData || {}
     readonly property bool expanded: root.expandedProviderId === provider.pid
     readonly property real share: Model.providerWeekShare(provider, service.providers)
+    // Prepaid credit ledger (DeepSeek collector); absent for subscription agents.
+    readonly property var balance: provider.balance || null
+    readonly property bool balanceAlarming: !!balance && balance.funded > 0
+      && balance.remaining / balance.funded <= 0.1
     readonly property int topN: 3
     property bool showAllModels: false
     readonly property var sortedModels: {
@@ -607,7 +698,7 @@ Panel {
             }
 
             Pill {
-              text: Model.dollars(Model.providerCost(provider, true)) + " / 7D"
+              text: Model.euros(Model.providerCost(provider, true), root.usdToEur) + " / 7D"
               tint: root.foreground
             }
           }
@@ -642,6 +733,56 @@ Panel {
 
               Behavior on width { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
             }
+          }
+        }
+      }
+
+      // Prepaid credit ledger (DeepSeek). Balances are per-account and only
+      // shown when the collector could fetch them.
+      Column {
+        visible: !!providerCard.balance
+        width: parent.width
+        spacing: Style.space(4)
+
+        RowLayout {
+          width: parent.width
+          spacing: Style.space(8)
+
+          Text {
+            text: "BALANCE"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          Item { Layout.fillWidth: true }
+
+          Text {
+            text: providerCard.balance
+              ? Model.money(providerCard.balance.remaining, providerCard.balance.currency)
+              : ""
+            color: providerCard.balanceAlarming ? root.urgent : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+        }
+
+        Rectangle {
+          visible: !!providerCard.balance && providerCard.balance.funded > 0
+          width: parent.width
+          height: Style.space(6)
+          radius: height / 2
+          color: Util.alpha(root.foreground, 0.14)
+
+          Rectangle {
+            width: parent.width * (providerCard.balance && providerCard.balance.funded > 0
+              ? Math.max(0, Math.min(1, providerCard.balance.remaining / providerCard.balance.funded))
+              : 0)
+            height: parent.height
+            radius: parent.radius
+            color: providerCard.balanceAlarming ? root.urgent : Util.alpha(root.foreground, 0.5)
           }
         }
       }
